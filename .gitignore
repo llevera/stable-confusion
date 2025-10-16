@@ -3,3 +3,6 @@ __pycache__
 evaluation-notebooks
 exp-images
 models
+multi_model_comparison/
+test-output/
+generated_images/
