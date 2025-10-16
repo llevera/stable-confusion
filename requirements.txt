@@ -1,0 +1,33 @@
+# Core ML and Deep Learning
+torch==2.4.0
+torchvision==0.19.0
+diffusers==0.33.1
+transformers==4.48.0
+safetensors==0.5.3
+
+# Hugging Face
+huggingface_hub==0.29.3
+
+# Data and Computing
+numpy<2.0.0,>=1.19.0  # Compatible with compiled packages
+pandas<2.0.0,>=1.5.0
+scipy<1.12.0,>=1.9.0
+scikit-learn<1.6,>=1.5.0
+scikit-image
+pyarrow>=14.0.0
+
+# Image Processing
+Pillow==11.2.1
+opencv-python-headless==4.10.0.84  # Headless version (no GUI dependencies)
+
+# Visualization and Metrics
+matplotlib==3.10.1
+lpips==0.1.4
+
+# Utilities
+tqdm==4.66.5
+requests==2.32.3
+packaging==25.0
+
+# Job submission (optional)
+submitit==1.5.2
