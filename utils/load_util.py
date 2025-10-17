@@ -1,6 +1,6 @@
 import torch
 import torch
-from diffusers import UNet2DConditionModel, LCMScheduler, StableDiffusionXLPipeline, EulerAncestralDiscreteScheduler, EulerDiscreteScheduler, DDIMScheduler
+from diffusers import UNet2DConditionModel, LCMScheduler, StableDiffusionXLPipeline, EulerAncestralDiscreteScheduler, EulerDiscreteScheduler, DDIMScheduler, TCDScheduler
 from huggingface_hub import hf_hub_download
 from safetensors.torch import load_file
 import sys
@@ -52,8 +52,73 @@ def load_sdxl_models(distillation_type='dmd', weights_dtype=torch.bfloat16, devi
         
         distilled_unet = UNet2DConditionModel.from_pretrained("latent-consistency/lcm-sdxl", torch_dtype=weights_dtype).to(device, weights_dtype)
         distilled_scheduler = LCMScheduler.from_config(pipe.scheduler.config)
+    
+    elif distillation_type == 'hyper':
+        # Hyper-SDXL 8-step CFG-preserved LoRA (supports typical guidance scales)
+        # Note: For 1-step, use hyper_1step which requires very low guidance
+        from diffusers import DiffusionPipeline
+        pipe = DiffusionPipeline.from_pretrained(basemodel_id, torch_dtype=weights_dtype)
+        pipe.load_lora_weights("ByteDance/Hyper-SD", weight_name="Hyper-SDXL-8steps-CFG-lora.safetensors", adapter_name="hyper-sdxl-8step")
+        pipe.set_adapters(["hyper-sdxl-8step"], adapter_weights=[1.0])
+        
+        distilled_unet = pipe.unet
+        distilled_scheduler = DDIMScheduler.from_config(pipe.scheduler.config)
+    
+    elif distillation_type == 'hyper_1step':
+        # Hyper-SDXL 1-step unified LoRA (very low guidance, negatives have limited effect)
+        from diffusers import DiffusionPipeline
+        pipe = DiffusionPipeline.from_pretrained(basemodel_id, torch_dtype=weights_dtype)
+        pipe.load_lora_weights("ByteDance/Hyper-SD", weight_name="Hyper-SDXL-1step-lora.safetensors", adapter_name="hyper-sdxl-1step")
+        pipe.set_adapters(["hyper-sdxl-1step"], adapter_weights=[1.0])
+        
+        distilled_unet = pipe.unet
+        distilled_scheduler = TCDScheduler.from_config(pipe.scheduler.config)
+    
+    elif distillation_type == 'pcm':
+        # PCM-SDXL - Phased Consistency Models (good for 1-16 steps)
+        # Uses DDIM scheduler with specific settings as recommended by PCM repo
+        from diffusers import DiffusionPipeline
+        pipe = DiffusionPipeline.from_pretrained(basemodel_id, torch_dtype=weights_dtype)
+        pipe.load_lora_weights("wangfuyun/PCM_Weights", weight_name="pcm_sdxl_smallcfg_4step_converted.safetensors", subfolder="sdxl", adapter_name="pcm-lora")
+        pipe.set_adapters(["pcm-lora"], adapter_weights=[1.0])
+        
+        distilled_unet = pipe.unet
+        # PCM recommends DDIM with these specific settings
+        distilled_scheduler = DDIMScheduler.from_config(
+            pipe.scheduler.config,
+            timestep_spacing="trailing",
+            clip_sample=False,
+            set_alpha_to_one=False
+        )
+    
+    elif distillation_type == 'tcd':
+        # TCD-SDXL - Trajectory Consistency Distillation (2-8 steps, uses standard CFG)
+        # Includes stochasticity parameter (gamma) for quality/stability tradeoff
+        from diffusers import DiffusionPipeline
+        pipe = DiffusionPipeline.from_pretrained(basemodel_id, torch_dtype=weights_dtype)
+        pipe.load_lora_weights("h1t/TCD-SDXL-LoRA", adapter_name="tcd-lora")
+        pipe.set_adapters(["tcd-lora"], adapter_weights=[1.0])
+        
+        distilled_unet = pipe.unet
+        distilled_scheduler = TCDScheduler.from_config(pipe.scheduler.config)
+    
+    elif distillation_type == 'flash':
+        # Flash Diffusion - Light adapters with broad compatibility
+        # Works with ControlNet, IP-Adapter, etc.
+        repo = "jasperai/flash-sdxl"
+        ckpt = "pytorch_lora_weights.safetensors"  # Correct filename in the repo
+        
+        from diffusers import DiffusionPipeline
+        pipe = DiffusionPipeline.from_pretrained(basemodel_id, torch_dtype=weights_dtype)
+        pipe.load_lora_weights(repo, weight_name=ckpt, adapter_name="flash-sdxl")
+        pipe.set_adapters(["flash-sdxl"], adapter_weights=[1.0])
+        
+        distilled_unet = pipe.unet
+        distilled_scheduler = EulerDiscreteScheduler.from_config(pipe.scheduler.config)
+    
     else:
-        raise Exception("Distillation Type is not recognised. Available options ('dmd', 'turbo', 'lightning', 'lcm')")
+        raise Exception("Distillation Type is not recognised. Available options: 'dmd', 'turbo', 'lightning', 'lcm', 'hyper', 'hyper_1step', 'pcm', 'tcd', 'flash'")
+    
     pipe.to(device).to(weights_dtype)
     return pipe, base_unet, base_scheduler, distilled_unet, distilled_scheduler
 
@@ -105,8 +170,59 @@ def load_pipe(distillation_type='dmd', weights_dtype=torch.bfloat16, device='cud
         distilled_unet = UNet2DConditionModel.from_pretrained("latent-consistency/lcm-sdxl", torch_dtype=weights_dtype).to(device, weights_dtype)
         pipe = StableDiffusionXLPipeline.from_pretrained(basemodel_id, unet=distilled_unet, torch_dtype=weights_dtype, use_safetensors=True)
         distilled_scheduler = LCMScheduler.from_config(pipe.scheduler.config)
+    
+    elif distillation_type == 'hyper':
+        # Hyper-SDXL 8-step CFG-preserved LoRA
+        from diffusers import DiffusionPipeline
+        pipe = DiffusionPipeline.from_pretrained(basemodel_id, torch_dtype=weights_dtype)
+        pipe.load_lora_weights("ByteDance/Hyper-SD", weight_name="Hyper-SDXL-8steps-CFG-lora.safetensors", adapter_name="hyper-sdxl-8step")
+        pipe.set_adapters(["hyper-sdxl-8step"], adapter_weights=[1.0])
+        distilled_scheduler = DDIMScheduler.from_config(pipe.scheduler.config)
+    
+    elif distillation_type == 'hyper_1step':
+        # Hyper-SDXL 1-step unified LoRA
+        from diffusers import DiffusionPipeline
+        pipe = DiffusionPipeline.from_pretrained(basemodel_id, torch_dtype=weights_dtype)
+        pipe.load_lora_weights("ByteDance/Hyper-SD", weight_name="Hyper-SDXL-1step-lora.safetensors", adapter_name="hyper-sdxl-1step")
+        pipe.set_adapters(["hyper-sdxl-1step"], adapter_weights=[1.0])
+        distilled_scheduler = TCDScheduler.from_config(pipe.scheduler.config)
+    
+    elif distillation_type == 'pcm':
+        # PCM-SDXL - Phased Consistency Models
+        # Uses DDIM scheduler with specific settings as recommended by PCM repo
+        from diffusers import DiffusionPipeline
+        pipe = DiffusionPipeline.from_pretrained(basemodel_id, torch_dtype=weights_dtype)
+        pipe.load_lora_weights("wangfuyun/PCM_Weights", weight_name="pcm_sdxl_smallcfg_4step_converted.safetensors", subfolder="sdxl", adapter_name="pcm-lora")
+        pipe.set_adapters(["pcm-lora"], adapter_weights=[1.0])
+        # PCM recommends DDIM with these specific settings
+        distilled_scheduler = DDIMScheduler.from_config(
+            pipe.scheduler.config,
+            timestep_spacing="trailing",
+            clip_sample=False,
+            set_alpha_to_one=False
+        )
+    
+    elif distillation_type == 'tcd':
+        # TCD-SDXL - Trajectory Consistency Distillation
+        from diffusers import DiffusionPipeline
+        pipe = DiffusionPipeline.from_pretrained(basemodel_id, torch_dtype=weights_dtype)
+        pipe.load_lora_weights("h1t/TCD-SDXL-LoRA", adapter_name="tcd-lora")
+        pipe.set_adapters(["tcd-lora"], adapter_weights=[1.0])
+        distilled_scheduler = TCDScheduler.from_config(pipe.scheduler.config)
+    
+    elif distillation_type == 'flash':
+        # Flash Diffusion
+        repo = "jasperai/flash-sdxl"
+        ckpt = "pytorch_lora_weights.safetensors"  # Correct filename in the repo
+        
+        from diffusers import DiffusionPipeline
+        pipe = DiffusionPipeline.from_pretrained(basemodel_id, torch_dtype=weights_dtype)
+        pipe.load_lora_weights(repo, weight_name=ckpt, adapter_name="flash-sdxl")
+        pipe.set_adapters(["flash-sdxl"], adapter_weights=[1.0])
+        distilled_scheduler = EulerDiscreteScheduler.from_config(pipe.scheduler.config)
+    
     else:
-        raise Exception("Distillation Type is not recognised. Available options ('dmd', 'turbo', 'lightning', 'lcm')")
+        raise Exception("Distillation Type is not recognised. Available options: 'dmd', 'turbo', 'lightning', 'lcm', 'hyper', 'hyper_1step', 'pcm', 'tcd', 'flash'")
 
     
     pipe.scheduler = distilled_scheduler

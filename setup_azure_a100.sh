@@ -142,7 +142,8 @@ else
         diffusers==0.33.1 \
         transformers==4.48.0 \
         safetensors==0.5.3 \
-        huggingface_hub==0.29.3
+        huggingface_hub==0.29.3 \
+        peft>=0.13.1
     
     # Data science packages
     print_status "Installing data science packages..."
