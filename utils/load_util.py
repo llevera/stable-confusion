@@ -128,9 +128,10 @@ def load_model(distillation_type=None, weights_dtype=torch.bfloat16, device='cud
         pipe = DiffusionPipeline.from_pretrained(basemodel_id, torch_dtype=weights_dtype)
         pipe.load_lora_weights(repo, weight_name=ckpt, adapter_name="flash-sdxl")
         pipe.set_adapters(["flash-sdxl"], adapter_weights=[1.0])
+        pipe.fuse_lora()
         
         distilled_unet = pipe.unet
-        distilled_scheduler = EulerDiscreteScheduler.from_config(pipe.scheduler.config)
+        distilled_scheduler = LCMScheduler.from_config(pipe.scheduler.config, timestep_spacing="trailing")
     
     else:
         raise ValueError(f"Distillation type '{distillation_type}' is not recognized. "
